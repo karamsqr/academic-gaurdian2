@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Academic Guardian</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;background:#f4f6fb;color:#1c2333}
+header{background:#1f3a8a;color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center}
+main{max-width:960px;margin:18px auto;padding:0 12px}
+.card{background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 4px #0002}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.pill{padding:3px 10px;border-radius:99px;font-weight:600;font-size:13px}
+.green,.Low{background:#d1fae5;color:#065f46}.amber,.Medium{background:#fef3c7;color:#92400e}.red,.High{background:#fee2e2;color:#991b1b}
+table{border-collapse:collapse;width:100%}td,th{padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:left}
+button,select,input,textarea{font:inherit;padding:6px 10px;border-radius:6px;border:1px solid #cbd5e1}
+button{background:#1f3a8a;color:#fff;border:0;cursor:pointer}button.ghost{background:#e5e7eb;color:#111}
+textarea{width:100%;box-sizing:border-box;height:70px;margin:8px 0}
+tr.warn{background:#fff7ed}
+#toast{position:fixed;right:16px;bottom:16px;background:#111827;color:#fff;padding:12px 16px;border-radius:8px;display:none;max-width:300px}
+.login button{margin:4px}
+</style></head><body>
+<header><b>🎓 Academic Guardian</b><span id="who"></span></header>
+<main id="main"></main><div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s);
+const api=(p,b)=>fetch('/api'+p,b?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}:{}).then(r=>r.json());
+let me=null,seen=0,on=false,rec=null;
+function toast(t){const e=$('#toast');e.textContent=t;e.style.display='block';setTimeout(()=>e.style.display='none',4500)}
+
+async function login(){
+  me=null;$('#who').innerHTML='';
+  const u=await api('/users');
+  $('#main').innerHTML=`<div class="card login"><h3>Demo login (pick a role)</h3>
+  ${u.map((x,i)=>`<button onclick="enter(${i})">${x.role==='student'?'🎓':x.role==='prof'?'👩‍🏫':'🛠'} ${x.name}</button>`).join('')}
+  <p><button class="ghost" onclick="api('/reset',{}).then(()=>toast('Demo data reset'))">Reset demo data</button></p></div>`;
+  window.U=u;
+}
+function enter(i){
+  me=U[i];seen=0;
+  $('#who').innerHTML=`${me.name} (${me.role}) <button id="bell" class="ghost" onclick="readAll()">🔔 0</button> <button class="ghost" onclick="login()">Switch</button>`;
+  ({student,prof:professor,admin})[me.role]();poll();
+}
+async function poll(){
+  if(!me)return;
+  const n=await api('/notifications/'+me.id),u=n.filter(x=>!x.read);
+  $('#bell').textContent='🔔 '+u.length;
+  if(u.length>seen)toast('🔔 '+u[0].text);
+  seen=u.length;
+  const box=$('#notes');if(box)box.innerHTML=n.slice(0,5).map(x=>`<div style="opacity:${x.read?.5:1}">• ${x.text}</div>`).join('')||'No notifications yet';
+}
+setInterval(poll,5000);
+async function readAll(){await api('/notifications/'+me.id+'/read',{});seen=0;poll()}
+
+async function student(){
+  const d=await api('/student/'+me.student_id);
+  $('#main').innerHTML=`<div class="card"><b>Notifications</b><div id="notes"></div></div>`+d.courses.map(c=>`
+  <div class="card"><h3>${c.course}</h3>
+  <div class="row"><span class="pill ${c.att.status}">Attendance ${c.att.current}%</span>
+  <span>Projected final: <b>${c.att.projected}%</b></span>
+  <span class="pill ${c.risk.level}">Risk: ${c.risk.level} (${c.risk.score})</span></div>
+  <p>${c.att.msg}</p>
+  <p><b>Main factors:</b> ${c.risk.top.join(', ')}.<br>${c.risk.insight}</p>
+  <table>${c.marks.map(m=>`<tr><td>${m.name}</td><td>${m.score}/${m.max_marks}</td>
+  <td><button class="ghost" onclick="report(${m.aid})">Report possible error</button></td></tr>`).join('')}</table></div>`).join('');
+  poll();
+}
+async function report(aid){await api('/report',{student_id:me.student_id,assessment_id:aid});toast('Professor notified')}
+
+async function professor(){
+  const A=await api('/prof');
+  $('#main').innerHTML=`<div class="card"><b>Notifications</b><div id="notes"></div></div>
+  <div class="card"><h3>🎤 Voice mark entry</h3>
+  <select id="asel">${A.map(a=>`<option value="${a.id}">${a.course} - ${a.name} (max ${a.max_marks})</option>`).join('')}</select>
+  <button id="mic" onclick="toggleMic()">🎤 Start dictating</button>
+  <textarea id="tx" placeholder="Say or type: Arjun Kumar eighteen, Meena twenty two, Rahul 9"></textarea>
+  <button onclick="parse()">Parse marks</button></div><div id="conf"></div>`;
+  poll();
+}
+function toggleMic(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return alert('Voice needs Chrome. You can type the text instead.');
+  if(on){rec.stop();return}
+  rec=new SR();rec.lang='en-IN';rec.continuous=true;
+  rec.onresult=e=>{$('#tx').value+=' '+[...e.results].slice(e.resultIndex).map(r=>r[0].transcript).join(' ')};
+  rec.onend=()=>{on=false;$('#mic').textContent='🎤 Start dictating'};
+  rec.start();on=true;$('#mic').textContent='⏹ Stop';
+}
+async function parse(){
+  const aid=+$('#asel').value;
+  const d=await api('/voice/parse',{assessment_id:aid,transcript:$('#tx').value});
+  if(!d.rows.length)return toast('No marks understood. Try: "Meena twenty two"');
+  $('#conf').innerHTML=`<div class="card"><h3>Confirm before saving</h3><table>
+  <tr><th>Heard</th><th>Student</th><th>Mark</th><th>Confidence</th></tr>
+  ${d.rows.map((r,i)=>`<tr class="${r.confidence<80||r.ambiguous?'warn':''}"><td>“${r.spoken}”</td>
+  <td><select id="st${i}">${d.roster.map(s=>`<option value="${s.id}" ${s.id==r.student_id?'selected':''}>${s.name}</option>`).join('')}</select></td>
+  <td><input id="sc${i}" type="number" step="0.5" min="0" max="${d.max}" value="${r.score}" style="width:80px"></td>
+  <td>${r.confidence}% ${r.ambiguous?'⚠ please check':''}</td></tr>`).join('')}</table>
+  <p><button onclick="save(${aid},${d.rows.length})">✅ Confirm all &amp; notify students</button></p></div>`;
+}
+async function save(aid,n){
+  const entries=[...Array(n).keys()].map(i=>({student_id:+$('#st'+i).value,score:+$('#sc'+i).value}));
+  const d=await api('/marks',{assessment_id:aid,entries});
+  if(d.detail)return alert(d.detail);
+  toast(`Saved ${d.saved} marks. Students notified.`);$('#conf').innerHTML='';$('#tx').value='';
+}
+
+async function admin(){
+  const d=await api('/admin');
+  $('#main').innerHTML=`<div class="card"><h3>Class risk heatmap</h3><table><tr><th>Student</th>${d.courses.map(c=>`<th>${c}</th>`).join('')}</tr>
+  ${d.rows.map(r=>`<tr><td>${r.student}</td>${r.cells.map(c=>`<td><span class="pill ${c.level}">${c.level} ${c.score}</span> <small>${c.att}% att</small></td>`).join('')}</tr>`).join('')}</table></div>`;
+}
+login();
+</script></body></html>
